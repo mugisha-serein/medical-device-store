@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -18,7 +19,7 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
     # JWT
-    JWT_SECRET_KEY: str = "CHANGE-ME-IN-PRODUCTION"
+    JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -43,6 +44,13 @@ class Settings(BaseSettings):
     BF_MAX_FAILURES: int = 5          # Failed attempts before lockout
     BF_LOCKOUT_SECONDS: int = 900     # Lockout duration (15 minutes)
     BF_WINDOW_SECONDS: int = 900      # Sliding window for counting failures (15 minutes)
+
+    @model_validator(mode="after")
+    def validate_jwt_signing_key(self):
+        value = self.JWT_SECRET_KEY.strip()
+        if len(value) < 32 or value.upper() in {"CHANGE-ME-IN-PRODUCTION", "CHANGE_ME_IN_PRODUCTION"}:
+            raise ValueError("JWT_SECRET_KEY must be a unique secret of at least 32 characters.")
+        return self
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

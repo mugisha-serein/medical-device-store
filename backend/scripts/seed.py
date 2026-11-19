@@ -141,8 +141,16 @@ PRODUCTS = [
 ]
 
 
+def get_seed_admin_password() -> str:
+    password = os.environ.get("ADMIN_SEED_PASSWORD", "")
+    if len(password) < 12 or password.lower() in {"admin123456", "password123456"}:
+        raise RuntimeError("Set ADMIN_SEED_PASSWORD to a unique password of at least 12 characters.")
+    return password
+
+
 async def seed():
     # Schema is managed by Alembic — run: alembic upgrade head
+    admin_password = get_seed_admin_password()
     async with async_session_factory() as session:
         # Seed categories
         category_map = {}
@@ -180,7 +188,7 @@ async def seed():
         admin = User(
             email="admin@activelife.rw",
             name="Admin User",
-            password_hash=hash_password("admin123456"),
+            password_hash=hash_password(admin_password),
             is_admin=True,
         )
         session.add(admin)
