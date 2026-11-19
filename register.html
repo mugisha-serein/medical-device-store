@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="assets/logo.png" type="image/png">
+<title>Create account — Active Life Medical</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="site-header"></div>
+
+<div class="auth-wrap">
+  <div class="auth-card">
+    <span class="eyebrow">Get started</span>
+    <h1>Create your account</h1>
+    <p class="sub">Needed to add items to cart and check out.</p>
+
+    <div class="form-msg" id="form-msg"></div>
+
+    <form id="register-form" novalidate>
+      <div class="field" id="field-name">
+        <label for="name">Full name</label>
+        <input type="text" id="name" name="name" autocomplete="name" required>
+        <div class="field-error">Enter your full name.</div>
+      </div>
+      <div class="field" id="field-email">
+        <label for="email">Email address</label>
+        <input type="email" id="email" name="email" autocomplete="email" required>
+        <div class="field-error">Enter a valid email address.</div>
+      </div>
+      <div class="field" id="field-password">
+        <label for="password">Password</label>
+        <div class="password-wrap">
+          <input type="password" id="password" name="password" autocomplete="new-password" required>
+          <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false"></button>
+        </div>
+        <div class="hint">At least 8 characters.</div>
+        <div class="strength-meter" id="strength-meter" hidden>
+          <div class="strength-segments" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+          <span class="strength-label" id="strength-label" role="status" aria-live="polite"></span>
+        </div>
+        <div class="field-error">Password must be at least 8 characters.</div>
+      </div>
+      <div class="field" id="field-confirm">
+        <label for="confirm">Confirm password</label>
+        <div class="password-wrap">
+          <input type="password" id="confirm" name="confirm" autocomplete="new-password" required>
+          <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false"></button>
+        </div>
+        <div class="field-error">Passwords do not match.</div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">Create account</button>
+    </form>
+
+    <p class="auth-switch">Already have an account? <a href="login.html">Log in</a></p>
+  </div>
+</div>
+
+<div id="site-footer"></div>
+
+<script src="js/products.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/cart.js"></script>
+<script src="js/main.js"></script>
+<script src="js/forms.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/pages/register.js"></script>
+</body>
+</html>

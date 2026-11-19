@@ -1,0 +1,19 @@
+{
+  "name": "activelifemedical-store",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Active Life Medical — static medical devices storefront demo (no build step)",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "lint": "eslint js tests scripts eslint.config.js --max-warnings=0",
+    "smoke": "node --test tests/smoke.test.mjs",
+    "check": "npm run lint && npm run smoke"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
+    "puppeteer-core": "^25.6.0"
+  }
+}

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="assets/logo.png" type="image/png">
+<title>About — Active Life Medical</title>
+<meta name="description" content="Why Active Life Medical: verified sourcing, secure checkout, real stock counts, and 48h dispatch.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="site-header"></div>
+
+<div class="container breadcrumb">
+  <a href="index.html">Home</a><span class="sep">/</span><span>About</span>
+</div>
+
+<main>
+  <section class="section" style="background:var(--color-surface); border-top:1px solid var(--color-border); border-bottom:1px solid var(--color-border);">
+    <div class="container about-grid">
+      <div>
+        <span class="eyebrow" style="font-family:var(--font-mono); font-size:0.72rem; color:var(--color-primary); text-transform:uppercase; letter-spacing:0.1em;">Why Active Life Medical</span>
+        <h2>Built for people who read the spec sheet.</h2>
+        <p style="color:var(--color-text-muted);">We publish full technical specifications, real-time stock counts, and sterilization/warranty details on every product — no vague listings, no guesswork.</p>
+        <p style="color:var(--color-text-muted); margin-top:16px;">Active Life Medical is a demo storefront for clinical-grade medical devices and home care equipment. Browse by category or create an account to place an order.</p>
+        <div style="margin-top:24px; display:flex; gap:12px; flex-wrap:wrap;">
+          <a href="categories.html" class="btn btn-primary">Browse categories</a>
+          <a href="register.html" class="btn btn-outline">Create an account</a>
+        </div>
+      </div>
+      <div class="about-cards">
+        <div class="cat-card" style="gap:8px;"><h3 style="font-size:0.95rem;">Verified sourcing</h3><p style="font-size:0.85rem;color:var(--color-text-muted);margin:0;">Every device is checked against manufacturer spec sheets.</p></div>
+        <div class="cat-card" style="gap:8px;"><h3 style="font-size:0.95rem;">Secure checkout</h3><p style="font-size:0.85rem;color:var(--color-text-muted);margin:0;">Account required for orders — full session control.</p></div>
+        <div class="cat-card" style="gap:8px;"><h3 style="font-size:0.95rem;">Real stock counts</h3><p style="font-size:0.85rem;color:var(--color-text-muted);margin:0;">No listing without an accurate, current inventory figure.</p></div>
+        <div class="cat-card" style="gap:8px;"><h3 style="font-size:0.95rem;">48h dispatch</h3><p style="font-size:0.85rem;color:var(--color-text-muted);margin:0;">Orders placed before 3pm ship the same business day.</p></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="site-footer" data-footer="full"></div>
+
+<script src="js/products.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/cart.js"></script>
+<script src="js/main.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/pages/about.js"></script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="assets/logo.png" type="image/png">
+<title>Active Life Medical — Medical Devices & Equipment</title>
+<meta name="description" content="Browse and order clinical-grade medical devices, mobility aids, monitoring equipment, and PPE.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="site-header"></div>
+
+<section class="hero">
+  <div class="container">
+    <div class="hero-copy">
+      <span class="eyebrow">Certified · Clinical-grade · Ships in 48h</span>
+      <h1>Medical equipment your care team can trust.</h1>
+      <p>From diagnostic tools to home rehabilitation gear — source clinically appropriate devices with transparent specs and real stock levels.</p>
+      <div class="hero-actions">
+        <a href="categories.html" class="btn btn-primary">Browse categories</a>
+        <a href="register.html" class="btn btn-outline" style="border-color: rgba(255,255,255,0.5); color:#fff;">Create an account</a>
+      </div>
+      <div class="hero-stats">
+        <div><strong id="stat-devices">24</strong><span>Devices listed</span></div>
+        <div><strong id="stat-categories">6</strong><span>Categories</span></div>
+        <div><strong>48h</strong><span>Dispatch window</span></div>
+      </div>
+    </div>
+    <div class="hero-visual">
+      <svg class="vitals-line" viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg">
+        <polyline points="0,60 60,60 80,20 100,100 120,40 140,60 200,60 220,30 240,90 260,60 400,60"
+          fill="none" stroke="#2E9E54" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p style="color:rgba(255,255,255,0.75); font-size:0.9rem; margin-top:16px;">Every listing includes a full spec sheet — model data, sterilization notes, and warranty terms — before you add it to cart.</p>
+    </div>
+  </div>
+</section>
+<div class="vitals-divider"></div>
+
+<main>
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Handpicked</span>
+          <h2>Featured products</h2>
+          <p>A rotating selection of clinical-grade essentials — every listing ships with a full spec sheet.</p>
+        </div>
+        <a class="btn btn-outline" href="products.html">Browse all products</a>
+      </div>
+      <div class="product-strip" id="featured-strip"></div>
+    </div>
+  </section>
+
+  <section class="section" style="padding-top:8px;">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Shop by category</span>
+          <h2>Featured categories</h2>
+          <p>Whether you're outfitting a clinic or supporting recovery at home, start with the category that matches the need.</p>
+        </div>
+        <a class="btn btn-outline" href="categories.html">View all categories</a>
+      </div>
+      <div class="grid" id="category-grid"></div>
+    </div>
+  </section>
+
+  <section class="section" style="background:var(--color-surface); border-top:1px solid var(--color-border); border-bottom:1px solid var(--color-border);">
+    <div class="container cta-banner">
+      <div>
+        <span class="eyebrow">Why Active Life Medical</span>
+        <h2>Built for people who read the spec sheet.</h2>
+        <p style="color:var(--color-text-muted);">Full technical specs, real-time stock, and sterilization/warranty details on every product — no vague listings, no guesswork.</p>
+      </div>
+      <a href="about.html" class="btn btn-primary">Learn more</a>
+    </div>
+  </section>
+</main>
+
+<div id="site-footer" data-footer="full"></div>
+
+<script src="js/products.js"></script>
+<script src="js/featured.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/cart.js"></script>
+<script src="js/main.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/pages/index.js"></script>
+</body>
+</html>
