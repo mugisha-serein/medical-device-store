@@ -4,7 +4,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: activelifemedical
-      POSTGRES_PASSWORD: activelifemedical
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in root .env}
       POSTGRES_DB: activelifemedical
     ports:
       - "5433:5432"
@@ -37,12 +37,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://activelifemedical:activelifemedical@postgres:5432/activelifemedical
-      DATABASE_URL_SYNC: postgresql://activelifemedical:activelifemedical@postgres:5432/activelifemedical
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in root .env}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC:?Set DATABASE_URL_SYNC in root .env}
       REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in root .env}
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       SERVE_FRONTEND: "1"
+      ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,9 +61,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql+asyncpg://activelifemedical:activelifemedical@postgres:5432/activelifemedical
-      DATABASE_URL_SYNC: postgresql://activelifemedical:activelifemedical@postgres:5432/activelifemedical
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in root .env}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC:?Set DATABASE_URL_SYNC in root .env}
       REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in root .env}
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
     depends_on:
