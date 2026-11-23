@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from alembic import context
 
 from app.core.config import get_settings
-from app.core.database import Base
+from app.core.database import Base, configure_sqlite_engine
 
 # Import all models so Alembic can detect them
 from app.identity.models import User
@@ -38,10 +38,19 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        context.configure(connection=supplied_connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = create_engine(
         settings.DATABASE_URL_SYNC,
         poolclass=pool.NullPool,
+        hide_parameters=True,
     )
+    configure_sqlite_engine(connectable)
 
     with connectable.connect() as connection:
         context.configure(

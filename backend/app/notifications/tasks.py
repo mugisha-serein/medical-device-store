@@ -62,7 +62,7 @@ def send_order_confirmation(self, order_id: str, user_email: str, total: float):
     <h2>Order Confirmed</h2>
     <p>Thank you for your order!</p>
     <p><strong>Order ID:</strong> {order_id}</p>
-    <p><strong>Total:</strong> ${total:.2f}</p>
+    <p><strong>Total:</strong> RWF {total:.2f}</p>
     <p>We'll notify you when your order is processed.</p>
     """
     try:
@@ -78,7 +78,7 @@ def send_payment_received(self, order_id: str, user_email: str, total: float):
     html = f"""
     <h2>Payment Received</h2>
     <p>We've received your payment for order {order_id}.</p>
-    <p><strong>Amount:</strong> ${total:.2f}</p>
+    <p><strong>Amount:</strong> RWF {total:.2f}</p>
     <p>Your order is now being processed.</p>
     """
     try:

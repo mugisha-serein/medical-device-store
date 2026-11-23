@@ -2,10 +2,11 @@ import uuid
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Float, Integer, DateTime, ForeignKey, Enum, Text, JSON
+from sqlalchemy import String, Float, Integer, ForeignKey, Enum, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.types import UTCDateTime
 
 
 def generate_uuid() -> str:
@@ -48,10 +49,10 @@ class Order(Base):
     payment_reference: Mapped[str] = mapped_column(String(255), nullable=True)
 
     placed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        UTCDateTime(), default=lambda: datetime.now(timezone.utc)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -87,7 +88,7 @@ class OutboxEvent(Base):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        UTCDateTime(), default=lambda: datetime.now(timezone.utc)
     )
     processed: Mapped[bool] = mapped_column(default=False, nullable=False)
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)

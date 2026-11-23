@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!.env.test.example
 env/
 venv/
 .venv/
@@ -9,3 +10,7 @@ venv/
 *.log
 .pytest_cache/
 .git/
+
+.test-deps/
+*.sqlite3
+*.sqlite3-*

@@ -37,10 +37,11 @@ async def decrement_stock(
     quantity: int,
 ) -> bool:
     """
-    Decrement stock atomically using row-level locking.
+    Decrement stock within the engine's serialized SQLite transaction.
     Returns True if successful, False if insufficient stock.
     """
-    # SELECT ... FOR UPDATE to lock the row
+    # Generic lock intent is retained; SQLite serialization is provided by
+    # BEGIN IMMEDIATE in the engine, before any inventory reads.
     result = await db.execute(
         select(Inventory)
         .where(Inventory.product_id == product_id)

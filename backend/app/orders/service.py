@@ -4,6 +4,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.orders.models import Order, OrderItem, OrderStatus, OutboxEvent
 from app.orders.schemas import OrderCreate
@@ -11,7 +12,7 @@ from app.catalog.models import Product
 from app.inventory.service import hold_stock, restore_stock, decrement_stock
 
 
-# Shipping cost: free over $250, otherwise $12.50
+# Existing shipping policy in RWF; preserve configured amounts.
 SHIPPING_THRESHOLD = 250.00
 SHIPPING_COST = 12.50
 
@@ -95,6 +96,9 @@ async def place_order(
     db.add(event)
 
     await db.flush()
+    # New collections are not select-in loaded automatically on an INSERT.
+    # Complete the async I/O before handing the object to response serialization.
+    await db.refresh(order, attribute_names=["items"])
     return order
 
 
@@ -107,7 +111,7 @@ async def cancel_order(
     Cancel an order. Restores stock exactly once (guards against double-cancel).
     """
     result = await db.execute(
-        select(Order).where(Order.id == order_id, Order.user_id == user_id)
+        select(Order).options(selectinload(Order.items)).where(Order.id == order_id, Order.user_id == user_id)
     )
     order = result.scalar_one_or_none()
     if not order:

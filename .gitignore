@@ -16,3 +16,7 @@ node_modules/
 .coverage
 dist/
 build/
+backend/.test-deps/
+*.sqlite3
+*.sqlite3-*
+!backend/.env.test.example

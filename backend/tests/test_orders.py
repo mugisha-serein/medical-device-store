@@ -221,5 +221,98 @@ async def test_shipping_free_over_threshold(client: AsyncClient, auth_headers: d
         },
     )
     assert response.status_code == 201
-    assert response.json()["shipping_cost"] == 0.0  # Free shipping over $250
+    assert response.json()["shipping_cost"] == 0.0  # Existing free-shipping threshold: RWF 250
     assert response.json()["total"] == 300.00
+
+
+@pytest.mark.asyncio
+async def test_created_order_serializes_without_an_open_session(db_session, test_user):
+    """Serialization must not require implicit async ORM I/O."""
+    from app.orders.service import place_order
+    from app.orders.schemas import OrderCreate, OrderResponse
+
+    _, product_id = await seed_product(db_session)
+    data = OrderCreate.model_validate({
+        "items": [{"product_id": product_id, "quantity": 2}],
+        "shipping": {"name": "Buyer", "address": "Kigali", "city": "Kigali", "phone": "+250788000000"},
+    })
+    order = await place_order(db_session, test_user.id, data)
+    await db_session.commit()
+    await db_session.close()
+    response = OrderResponse.model_validate(order)
+    assert response.items[0].product_id == product_id
+    assert response.items[0].quantity == 2
+    assert response.total == 212.50
+
+
+@pytest.mark.asyncio
+async def test_failed_order_rolls_back_all_stock_and_outbox_changes(client, auth_headers, db_session):
+    from sqlalchemy import text
+    _, product_id = await seed_product(db_session)
+    response = await client.post("/api/v1/orders", headers=auth_headers, json={
+        "items": [{"product_id": product_id, "quantity": 6}, {"product_id": product_id, "quantity": 6}],
+        "shipping": {"name": "Buyer", "address": "Kigali", "city": "Kigali", "phone": "+250788000000"},
+    })
+    assert response.status_code == 409
+    for table in ("orders", "order_items", "stock_holds", "outbox_events"):
+        assert await db_session.scalar(text(f"SELECT count(*) FROM {table}")) == 0
+    assert await db_session.scalar(text("SELECT quantity_held FROM inventory")) == 0
+
+
+@pytest.mark.asyncio
+async def test_order_lifecycle_preserves_items_and_ownership(client, auth_headers, db_session):
+    from app.core.security import create_access_token
+    from app.identity.models import User
+    _, product_id = await seed_product(db_session)
+    other = User(email="other@example.com", name="Other", password_hash="unused-test-hash")
+    db_session.add(other)
+    await db_session.commit()
+    other_headers = {"Authorization": "Bearer " + create_access_token({"sub": other.id})}
+    payload = {
+        "items": [{"product_id": product_id, "quantity": 2}],
+        "shipping": {"name": "Buyer", "address": "Kigali", "city": "Kigali", "phone": "+250788000000"},
+    }
+    placed = await client.post("/api/v1/orders", headers=auth_headers, json=payload)
+    assert placed.status_code == 201
+    data = placed.json()
+    order_id = data["id"]
+    assert data["items"][0]["unit_price"] == 100.0
+    detail = await client.get(f"/api/v1/orders/{order_id}", headers=auth_headers)
+    assert detail.json() == data
+    listed = await client.get("/api/v1/orders", headers=auth_headers)
+    assert listed.json() == [data]
+    assert (await client.get(f"/api/v1/orders/{order_id}", headers=other_headers)).status_code == 404
+    assert (await client.post(f"/api/v1/orders/{order_id}/cancel", headers=other_headers)).status_code == 404
+    assert (await client.get("/api/v1/orders", headers=other_headers)).json() == []
+    cancelled = await client.post(f"/api/v1/orders/{order_id}/cancel", headers=auth_headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["items"] == data["items"]
+    assert cancelled.json()["total"] == data["total"]
+    assert cancelled.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_listing_orders_batches_item_loading(client, auth_headers, db_session):
+    from sqlalchemy import event
+    from app.core.database import engine
+    _, product_id = await seed_product(db_session)
+    payload = {
+        "items": [{"product_id": product_id, "quantity": 1}],
+        "shipping": {"name": "Buyer", "address": "Kigali", "city": "Kigali", "phone": "+250788000000"},
+    }
+    for _ in range(5):
+        assert (await client.post("/api/v1/orders", headers=auth_headers, json=payload)).status_code == 201
+    item_queries = []
+
+    def count_items(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and "FROM order_items" in statement:
+            item_queries.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", count_items)
+    try:
+        response = await client.get("/api/v1/orders", headers=auth_headers)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count_items)
+    assert response.status_code == 200
+    assert len(response.json()) == 5
+    assert 1 <= len(item_queries) <= 2

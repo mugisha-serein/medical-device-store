@@ -46,7 +46,7 @@ async def initiate_payment(
     payment = PaymentInitiation(
         order_id=order.id,
         amount=order.total,
-        currency="USD",
+        currency="RWF",
         email=current_user.email,
         name=current_user.name,
         redirect_url=data.return_url,

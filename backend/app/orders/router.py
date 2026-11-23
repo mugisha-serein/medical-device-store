@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -33,6 +34,7 @@ async def list_orders(
     """List orders for the current user, newest first."""
     result = await db.execute(
         select(Order)
+        .options(selectinload(Order.items))
         .where(Order.user_id == current_user.id)
         .order_by(Order.placed_at.desc())
         .offset(skip)
@@ -62,7 +64,7 @@ async def get_order(
 ):
     """Get order details. Users can only see their own orders."""
     result = await db.execute(
-        select(Order).where(
+        select(Order).options(selectinload(Order.items)).where(
             Order.id == order_id,
             Order.user_id == current_user.id,
         )

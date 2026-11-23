@@ -55,7 +55,7 @@ activelifemedical-store/
 │   │   ├── core/               # Database, config, security, rate limiting, brute-force protection
 │   │   ├── identity/           # User management, JWT auth
 │   │   ├── catalog/            # Products, categories, spec sheets
-│   │   ├── inventory/          # Stock management with row-level locking
+│   │   ├── inventory/          # Stock management with serialized SQLite transactions
 │   │   ├── orders/             # Order lifecycle, transactional outbox
 │   │   ├── payments/           # Flutterwave gateway (hexagonal adapter pattern)
 │   │   └── notifications/      # Celery tasks for async email (Resend)
@@ -66,7 +66,7 @@ activelifemedical-store/
 │   ├── requirements.txt
 │   └── .env.example
 │
-├── docker-compose.yml          # Postgres, Redis, FastAPI, Celery worker
+├── docker-compose.yml          # SQLite, Redis, FastAPI, Celery worker
 ├── package.json                # ESLint + Puppeteer for frontend tooling
 └── eslint.config.js            # ESLint 9 flat config
 ```
@@ -89,7 +89,7 @@ activelifemedical-store/
 | Layer | Technology | Why |
 |---|---|---|
 | API framework | FastAPI 0.115 | Async Python, auto-generated OpenAPI docs, Pydantic validation |
-| Database | PostgreSQL 16 (via SQLAlchemy 2.0 + asyncpg) | ACID transactions, row-level locking, JSON column support |
+| Database | SQLite3 (SQLAlchemy 2.0 + aiosqlite over Python sqlite3) | File persistence, transactions, JSON column support |
 | Migrations | Alembic | Version-controlled schema changes |
 | Auth | JWT (`python-jose`) + Argon2 (`passlib[argon2]`) | Stateless tokens, memory-hard password hashing |
 | Payments | Flutterwave (via `httpx`) | Supports RWF, MTN MoMo, Airtel Money, and cards in Africa |
@@ -138,7 +138,7 @@ The backend follows a **bounded-context architecture** (inspired by Domain-Drive
 #### 3. `inventory` — Stock Management
 
 - **Models**: `Inventory` (quantity_total, quantity_held, quantity_committed), `StockHold` (order_id, quantity, status, expires_at)
-- **Key behavior**: Stock is its own aggregate, not a column on Product. All mutations use `SELECT ... FOR UPDATE` (row-level locking) to prevent two concurrent orders from both succeeding on the last unit.
+- **Key behavior**: Stock is its own aggregate, not a column on Product. Transactions acquire a SQLite write lock with `BEGIN IMMEDIATE` before inventory reads to prevent overselling.
 - **Stock holds**: When an order is placed, stock is held (not committed) for 15 minutes. If payment succeeds, the hold is committed. If the hold expires or the order is cancelled, the held quantity is released back to available stock.
 - **Formulas**: `quantity_available = quantity_total - quantity_held - quantity_committed`
 
@@ -170,7 +170,7 @@ The backend follows a **bounded-context architecture** (inspired by Domain-Drive
 │                  Docker Compose                  │
 │                                                  │
 │  ┌──────────┐  ┌───────┐  ┌──────┐  ┌────────┐ │
-│  │ Postgres │  │ Redis │  │ Web  │  │ Celery │ │
+│  │ SQLite   │  │ Redis │  │ Web  │  │ Celery │ │
 │  │   16     │  │  7    │  │ API  │  │ Worker │ │
 │  │          │  │       │  │:8000 │  │        │ │
 │  └──────────┘  └───────┘  └──────┘  └────────┘ │
@@ -180,7 +180,7 @@ The backend follows a **bounded-context architecture** (inspired by Domain-Drive
 └─────────────────────────────────────────────────┘
 ```
 
-- **PostgreSQL 16**: Primary database for all application state.
+- **SQLite3**: Primary database for application state, stored in `backend/activelifemedical.sqlite3`. Redis remains the security cache and Celery broker.
 - **Redis 7**: Used for rate limiting, brute-force protection, Celery broker, and Celery result backend.
 - **FastAPI web server**: Serves the REST API on port 8000.
 - **Celery worker**: Processes async tasks (email notifications, outbox events).
@@ -202,16 +202,12 @@ npm run dev
 ### Backend (Docker Compose — Recommended)
 
 ```bash
-cd backend
-
-# Copy and edit environment variables
+# From the repository root; configure private secrets in root .env
 cp .env.example .env
 
-# Start all services
-docker-compose up -d
-
-# Run database migrations
-docker-compose exec web alembic upgrade head
+# Explicitly initialize a new installation before starting the web service
+docker compose run --rm web python -m scripts.sqlite_database initialize --create
+docker compose up -d
 
 # Seed initial data (6 categories, 24 products, admin user)
 docker-compose exec web python -m scripts.seed
@@ -234,11 +230,12 @@ pip install -r requirements.txt
 # Copy and configure environment variables
 cp .env.example .env
 
-# Start PostgreSQL and Redis (use Docker or local installs)
-docker-compose up -d postgres redis
+# Start Redis (SQLite requires no database server)
+docker-compose up -d redis
 
-# Run migrations
-alembic upgrade head
+# Initialize an intentional new installation
+python -m scripts.sqlite_database initialize --create
+# Existing database: python -m scripts.sqlite_database initialize
 
 # Seed data
 python -m scripts.seed
@@ -251,7 +248,7 @@ uvicorn app.main:app --reload
 
 | Role | Email | Password |
 |---|---|---|
-| Admin | admin@activelife.rw | admin123456 |
+| Admin | admin@activelife.rw | Private `ADMIN_SEED_PASSWORD` supplied when seeding; no default |
 
 ## API Reference
 
@@ -387,6 +384,10 @@ The smoke test suite covers:
 ```bash
 cd backend
 
+# Install test dependencies and configure the isolated database
+pip install -r requirements-test.txt
+cp .env.test.example .env.test
+
 # Run all tests
 pytest
 
@@ -427,7 +428,7 @@ See `backend/.env.example` for the full list. Key variables:
 
 | Variable | Description | Default |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL connection string (async) | `postgresql+asyncpg://activelifemedical:activelifemedical@localhost:5432/activelifemedical` |
+| `DATABASE_URL` | SQLite async URL | `sqlite+aiosqlite:///activelifemedical.sqlite3` |
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` |
 | `JWT_SECRET_KEY` | Secret for signing JWT tokens | Must be changed in production |
 | `FLW_SECRET_KEY` | Flutterwave API secret key | Empty (uses mock gateway) |
