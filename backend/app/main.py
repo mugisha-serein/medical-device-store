@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
-from app.core.database import engine
+from app.core.database import engine, check_database_ready
 
 settings = get_settings()
 
@@ -19,10 +19,11 @@ FRONTEND_DIR = _docker_mount if _docker_mount.is_dir() else Path(__file__).resol
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Schema is managed by Alembic — run: alembic upgrade head
-    yield
-    # Shutdown
-    await engine.dispose()
+    try:
+        await check_database_ready(engine)
+        yield
+    finally:
+        await engine.dispose()
 
 
 app = FastAPI(

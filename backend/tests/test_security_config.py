@@ -20,6 +20,13 @@ def test_valid_jwt_key(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "unit-test-signing-key-abcdefghijklmnopqrstuvwxyz")
     assert Settings(_env_file=None).JWT_SECRET_KEY.startswith("unit-test-")
 
+
+def test_settings_validation_does_not_echo_private_values():
+    private_value = "synthetic-private-key"
+    with pytest.raises(ValidationError) as error:
+        Settings(_env_file=None, JWT_SECRET_KEY=private_value)
+    assert private_value not in str(error.value)
+
 def test_seed_password_required(monkeypatch):
     monkeypatch.delenv("ADMIN_SEED_PASSWORD", raising=False)
     with pytest.raises(RuntimeError, match="ADMIN_SEED_PASSWORD"):

@@ -1,11 +1,12 @@
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Enum, Text
+from sqlalchemy import String, Integer, ForeignKey, Enum, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 
 from app.core.database import Base
+from app.core.types import UTCDateTime
 
 
 def generate_uuid() -> str:
@@ -30,7 +31,7 @@ class Inventory(Base):
     quantity_held: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     quantity_committed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
@@ -56,9 +57,9 @@ class StockHold(Base):
     status: Mapped[HoldStatus] = mapped_column(
         Enum(HoldStatus), default=HoldStatus.ACTIVE, nullable=False
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        UTCDateTime(), default=lambda: datetime.now(timezone.utc)
     )
 
     # Relationships

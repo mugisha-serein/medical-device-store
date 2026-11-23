@@ -30,6 +30,8 @@ class OrderItemResponse(BaseModel):
     unit_price: float
     line_total: float
 
+    model_config = {"from_attributes": True}
+
 
 class OrderResponse(BaseModel):
     id: str

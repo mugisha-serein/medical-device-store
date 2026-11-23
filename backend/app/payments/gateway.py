@@ -19,11 +19,15 @@ class PaymentInitiation:
     """Data needed to initiate a payment."""
     order_id: str
     amount: float
-    currency: str = "USD"
+    currency: str = "RWF"
     email: str = ""
     name: str = ""
     phone: str = ""
     redirect_url: str = ""
+
+    def __post_init__(self):
+        if self.currency != "RWF":
+            raise ValueError("Only RWF payments are supported.")
 
 
 @dataclass

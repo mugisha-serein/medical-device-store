@@ -1,5 +1,12 @@
-import asyncio
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from tests.db_isolation import configure_test_database, guarded_schema_change, IsolationError
+
+# A test-only, ignored file; resolve independently of pytest's working directory.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env.test", override=False)
+configure_test_database()
 
 os.environ["JWT_SECRET_KEY"] = "unit-test-only-jwt-signing-secret-32-plus-characters"
 import pytest
@@ -12,21 +19,35 @@ from app.core.security import hash_password
 from app.identity.models import User
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+@pytest_asyncio.fixture(autouse=True)
+async def isolated_security_cache(monkeypatch):
+    """Exercise security controls with a fresh, test-only Redis implementation."""
+    from fakeredis.aioredis import FakeRedis
+    from app.core import rate_limit, brute_force
+
+    cache = FakeRedis(decode_responses=True)
+    monkeypatch.setattr(rate_limit, "_redis", cache)
+    monkeypatch.setattr(brute_force, "_redis", cache)
+    yield
+    await cache.aclose()
 
 
 @pytest_asyncio.fixture(scope="function")
 async def setup_db():
-    """Create tables for each test."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Change schema only after verifying identity on that same connection."""
+    try:
+        async with engine.begin() as conn:
+            await guarded_schema_change(conn, Base.metadata.create_all)
+    except Exception:
+        raise IsolationError("Test database setup failed; verify private test configuration and database access.") from None
     yield
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    try:
+        async with engine.begin() as conn:
+            await guarded_schema_change(conn, Base.metadata.drop_all)
+    except Exception:
+        raise IsolationError("Test database teardown failed; no unverified schema cleanup is permitted.") from None
+    finally:
+        await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -57,6 +78,8 @@ async def test_user(db_session):
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
+    # Release the fixture transaction before the HTTP client uses the database.
+    await db_session.commit()
     return user
 
 
@@ -73,6 +96,8 @@ async def admin_user(db_session):
     db_session.add(user)
     await db_session.commit()
     await db_session.refresh(user)
+    # Release the fixture transaction before the HTTP client uses the database.
+    await db_session.commit()
     return user
 
 
