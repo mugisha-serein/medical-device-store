@@ -1,5 +1,10 @@
+import json
+import uuid
+from decimal import Decimal, InvalidOperation
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -95,20 +100,97 @@ async def payment_webhook(
     if not await gateway.verify_webhook(body, signature):
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
 
-    import json
     payload = json.loads(body)
     event = payload.get("event")
     data = payload.get("data", {})
 
-    if event == "charge.completed" and data.get("status") == "successful":
-        tx_ref = data.get("tx_ref", "")
-        # Extract order_id from tx_ref (format: alm-{order_id})
-        if tx_ref.startswith("alm-"):
-            order_id = tx_ref[len("alm-"):]
-            try:
-                await confirm_payment(db, order_id, data.get("id", ""))
-            except Exception:
-                # Log error but don't fail webhook — PSP will retry
-                pass
+    if event == "charge.completed":
+        if not isinstance(data, dict):
+            return {"status": "ok"}
+
+        # Flutterwave documents transaction IDs as positive int32 values. Do not
+        # coerce strings, booleans, floats, or out-of-range values into IDs.
+        transaction_id = data.get("id")
+        if (
+            isinstance(transaction_id, bool)
+            or not isinstance(transaction_id, int)
+            or transaction_id <= 0
+            or transaction_id > 2_147_483_647
+        ):
+            return {"status": "ok"}
+
+        webhook_reference = data.get("tx_ref")
+        if not isinstance(webhook_reference, str) or not webhook_reference.startswith("alm-"):
+            return {"status": "ok"}
+        order_id = webhook_reference[len("alm-"):]
+        try:
+            if str(uuid.UUID(order_id)) != order_id:
+                raise ValueError
+        except (ValueError, AttributeError):
+            return {"status": "ok"}
+        expected_reference = f"alm-{order_id}"
+        if webhook_reference != expected_reference:
+            return {"status": "ok"}
+
+        try:
+            verified = await gateway.verify_transaction(transaction_id)
+        except Exception:
+            # Preserve the existing webhook acknowledgement behavior without
+            # exposing provider exception text or credentials.
+            return {"status": "ok"}
+        if not isinstance(verified, dict):
+            return {"status": "ok"}
+
+        # Flutterwave v3's transaction verification response contains id,
+        # tx_ref, amount, currency, and status in its `data` object.
+        verified_id = verified.get("id")
+        verified_amount = verified.get("amount")
+        if (
+            verified.get("status") != "successful"
+            or isinstance(verified_id, bool)
+            or not isinstance(verified_id, int)
+            or verified_id != transaction_id
+            or verified.get("tx_ref") != expected_reference
+            or webhook_reference != expected_reference
+            or verified.get("currency") != "RWF"
+            or isinstance(verified_amount, bool)
+            or not isinstance(verified_amount, (int, float))
+        ):
+            return {"status": "ok"}
+
+        result = await db.execute(select(Order).where(Order.id == order_id))
+        order = result.scalar_one_or_none()
+        if order is None:
+            return {"status": "ok"}
+
+        try:
+            provider_amount = Decimal(str(verified_amount))
+            expected_amount = Decimal(str(order.total))
+        except (InvalidOperation, ValueError, TypeError):
+            return {"status": "ok"}
+        if not provider_amount.is_finite() or provider_amount != expected_amount:
+            return {"status": "ok"}
+
+        payment_reference = str(transaction_id)
+        reused = await db.execute(
+            select(Order.id).where(
+                Order.payment_reference == payment_reference,
+                Order.id != order_id,
+            )
+        )
+        if reused.scalar_one_or_none() is not None:
+            return {"status": "ok"}
+
+        if order.status == OrderStatus.PAID and order.payment_reference == payment_reference:
+            # A verified replay is acknowledged without repeating stock or outbox work.
+            return {"status": "ok"}
+        if order.status != OrderStatus.PENDING_PAYMENT:
+            return {"status": "ok"}
+
+        try:
+            await confirm_payment(db, order_id, payment_reference)
+        except Exception:
+            # Log error but don't fail webhook — PSP will retry
+            pass
 
     return {"status": "ok"}
