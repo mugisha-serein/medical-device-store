@@ -53,7 +53,7 @@ class PaymentGateway(ABC):
         ...
 
     @abstractmethod
-    async def verify_transaction(self, transaction_id: str) -> Optional[dict]:
+    async def verify_transaction(self, transaction_id: int) -> Optional[dict]:
         """Verify a transaction's status with the PSP."""
         ...
 
@@ -130,7 +130,7 @@ class FlutterwaveAdapter(PaymentGateway):
         ).hexdigest()
         return hmac.compare_digest(expected, signature)
 
-    async def verify_transaction(self, transaction_id: str) -> Optional[dict]:
+    async def verify_transaction(self, transaction_id: int) -> Optional[dict]:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
@@ -163,7 +163,7 @@ class MockPaymentGateway(PaymentGateway):
     async def verify_webhook(self, payload: bytes, signature: str) -> bool:
         return True
 
-    async def verify_transaction(self, transaction_id: str) -> Optional[dict]:
+    async def verify_transaction(self, transaction_id: int) -> Optional[dict]:
         return {"status": "successful", "id": transaction_id}
 
 
