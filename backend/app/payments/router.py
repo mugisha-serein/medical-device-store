@@ -7,9 +7,23 @@ from app.core.security import get_current_user
 from app.identity.models import User
 from app.orders.models import Order, OrderStatus
 from app.orders.service import confirm_payment
-from app.payments.gateway import get_payment_gateway, PaymentInitiation
+from app.payments.gateway import (
+    PaymentGatewayConfigurationError,
+    PaymentInitiation,
+    get_payment_gateway,
+)
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
+
+
+def _get_payment_gateway_or_503():
+    try:
+        return get_payment_gateway()
+    except PaymentGatewayConfigurationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment gateway is not configured.",
+        ) from None
 
 
 class PaymentInitiateRequest(BaseModel):
@@ -42,7 +56,7 @@ async def initiate_payment(
             detail=f"Order is in '{order.status}' status, cannot initiate payment.",
         )
 
-    gateway = get_payment_gateway()
+    gateway = _get_payment_gateway_or_503()
     payment = PaymentInitiation(
         order_id=order.id,
         amount=order.total,
@@ -75,7 +89,7 @@ async def payment_webhook(
     body = await request.body()
     signature = request.headers.get("verif-hash", "")
 
-    gateway = get_payment_gateway()
+    gateway = _get_payment_gateway_or_503()
 
     # Verify webhook signature
     if not await gateway.verify_webhook(body, signature):

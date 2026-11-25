@@ -58,6 +58,10 @@ class PaymentGateway(ABC):
         ...
 
 
+class PaymentGatewayConfigurationError(RuntimeError):
+    """Raised when the real payment provider is not configured."""
+
+
 class FlutterwaveAdapter(PaymentGateway):
     """Flutterwave payment adapter implementation."""
 
@@ -164,8 +168,15 @@ class MockPaymentGateway(PaymentGateway):
 
 
 def get_payment_gateway() -> PaymentGateway:
-    """Factory function to get the appropriate payment gateway."""
+    """Return the configured real gateway; never fall back to an unsafe mock."""
     settings = get_settings()
-    if settings.FLW_SECRET_KEY:
-        return FlutterwaveAdapter()
-    return MockPaymentGateway()
+    secret_key = settings.FLW_SECRET_KEY
+    webhook_secret = settings.FLW_WEBHOOK_SECRET
+    if (
+        not isinstance(secret_key, str)
+        or not secret_key.strip()
+        or not isinstance(webhook_secret, str)
+        or not webhook_secret.strip()
+    ):
+        raise PaymentGatewayConfigurationError("Payment gateway is not configured.")
+    return FlutterwaveAdapter()
