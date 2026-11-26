@@ -18,6 +18,7 @@ Usage:
 
 import time
 from typing import Optional
+from uuid import uuid4
 
 import redis.asyncio as redis
 from fastapi import Depends, HTTPException, Request, status
@@ -148,7 +149,7 @@ class RateLimiter:
         pipe = r.pipeline()
         pipe.zremrangebyscore(key, 0, window_start)
         pipe.zcard(key)
-        pipe.zadd(key, {f"{now}:{id(request)}": now})
+        pipe.zadd(key, {uuid4().hex: now})
         pipe.expire(key, self.window_seconds + 10)
         results = await pipe.execute()
 
