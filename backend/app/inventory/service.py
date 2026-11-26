@@ -1,3 +1,5 @@
+from collections import Counter
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from sqlalchemy import select, update
@@ -125,33 +127,54 @@ async def hold_stock(
     return hold
 
 
-async def commit_hold(db: AsyncSession, order_id: str) -> bool:
-    """
-    Convert held stock to committed (on payment success).
-    """
+class StockReservationError(RuntimeError):
+    """An order's reservations cannot be committed safely."""
+
+
+async def commit_hold(
+    db: AsyncSession, order_id: str, order_items: Iterable[tuple[str, int]],
+) -> None:
+    """Validate and commit every stock hold inside the caller's transaction."""
+    expected = Counter(order_items)
     result = await db.execute(
-        select(StockHold).where(
-            StockHold.order_id == order_id,
-            StockHold.status == HoldStatus.ACTIVE,
-        )
+        select(StockHold, Inventory)
+        .outerjoin(Inventory, Inventory.id == StockHold.inventory_id)
+        .where(StockHold.order_id == order_id)
     )
-    holds = result.scalars().all()
+    reservations = result.all()
+    now = datetime.now(timezone.utc)
+    actual = Counter()
+    inventory_by_id = {}
+    for hold, inventory in reservations:
+        if (
+            inventory is None
+            or hold.status != HoldStatus.ACTIVE
+            or hold.expires_at <= now
+            or hold.quantity <= 0
+        ):
+            raise StockReservationError("Order has an invalid stock reservation.")
+        actual[inventory.product_id, hold.quantity] += 1
+        inventory_by_id[inventory.id] = inventory
 
-    for hold in holds:
-        inv = await db.execute(
-            select(Inventory)
-            .where(Inventory.id == hold.inventory_id)
-            .with_for_update()
-        )
-        inv_row = inv.scalar_one_or_none()
-        if inv_row:
-            inv_row.quantity_held -= hold.quantity
-            inv_row.quantity_committed += hold.quantity
-            hold.status = HoldStatus.COMMITTED
-            db.add(inv_row)
-            db.add(hold)
+    # Placement creates one hold per order line, including repeated products.
+    if not expected or actual != expected:
+        raise StockReservationError("Stock reservations do not match the order items.")
 
-    return len(holds) > 0
+    for inventory in inventory_by_id.values():
+        active_quantities = [hold.quantity for hold in inventory.holds if hold.status == HoldStatus.ACTIVE]
+        if (
+            any(quantity <= 0 for quantity in active_quantities)
+            or inventory.quantity_held != sum(active_quantities)
+            or inventory.quantity_committed < 0
+            or inventory.quantity_available < 0
+        ):
+            raise StockReservationError("Inventory counters do not match available stock or active holds.")
+
+    for hold, inventory in reservations:
+        inventory.quantity_held -= hold.quantity
+        inventory.quantity_committed += hold.quantity
+        hold.status = HoldStatus.COMMITTED
+    await db.flush()
 
 
 async def release_hold(db: AsyncSession, order_id: str) -> bool:
