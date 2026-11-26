@@ -172,7 +172,7 @@ async def confirm_payment(
 
     # Commit held stock
     from app.inventory.service import commit_hold
-    await commit_hold(db, order.id)
+    await commit_hold(db, order.id, ((item.product_id, item.quantity) for item in order.items))
 
     order.status = OrderStatus.PAID
     order.payment_reference = payment_reference
