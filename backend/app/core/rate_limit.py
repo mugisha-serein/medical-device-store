@@ -23,9 +23,11 @@ from uuid import uuid4
 
 import redis.asyncio as redis
 from fastapi import Depends, HTTPException, Request, status
+from jwt.exceptions import PyJWTError
 from starlette.responses import Response
 
 from app.core.config import get_settings
+from app.core.security import verify_token_claims
 
 _settings = get_settings()
 
@@ -115,15 +117,14 @@ def _is_admin_user(request: Request) -> bool:
     if not token or _settings.JWT_ADMIN_BYPASS is False:
         return False
     try:
-        from jose import jwt as jose_jwt
-        payload = jose_jwt.decode(
-            token,
-            _settings.JWT_SECRET_KEY,
-            algorithms=[_settings.JWT_ALGORITHM],
-        )
-        return payload.get("is_admin") is True
-    except Exception:
+        payload = verify_token_claims(token)
+    except PyJWTError:
         return False
+    return (
+        payload.get("type") == "access"
+        and bool(payload.get("sub"))
+        and payload.get("is_admin") is True
+    )
 
 
 class RateLimiter:

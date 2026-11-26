@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError, PyJWTError
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -43,18 +44,35 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) 
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_token(token: str) -> dict:
+def verify_token_claims(token: str) -> dict:
+    """Verify tokens using only server configuration and validate app claim types."""
     try:
         payload = jwt.decode(
-            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM],
+            options={"require": ["exp"]},
         )
-        return payload
-    except JWTError:
+    except (TypeError, OverflowError):
+        # Malformed NumericDate values can fail during PyJWT's conversion.
+        raise InvalidTokenError("Invalid token claim") from None
+
+    if any(type(payload[claim]) is not int for claim in ("exp", "iat", "nbf") if claim in payload):
+        raise InvalidTokenError("Invalid timestamp claim")
+    if "sub" in payload and (not isinstance(payload["sub"], str) or not payload["sub"].strip()):
+        raise InvalidTokenError("Invalid subject claim")
+    if "is_admin" in payload and not isinstance(payload["is_admin"], bool):
+        raise InvalidTokenError("Invalid administrator claim")
+    return payload
+
+
+def decode_token(token: str) -> dict:
+    try:
+        return verify_token_claims(token)
+    except PyJWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
 
 
 async def get_current_user(
