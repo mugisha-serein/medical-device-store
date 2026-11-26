@@ -241,7 +241,7 @@ python -m scripts.sqlite_database initialize --create
 python -m scripts.seed
 
 # Start the server
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --no-proxy-headers
 ```
 
 ### Default Credentials (After Seeding)

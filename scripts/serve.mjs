@@ -86,5 +86,5 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log(`Active Life Medical frontend → http://localhost:${PORT}`);
   console.log(`Proxying /api/* → ${BACKEND_URL}`);
-  console.log(`Start FastAPI with: cd backend && uvicorn app.main:app --port 8001 --reload`);
+  console.log(`Start FastAPI with: cd backend && uvicorn app.main:app --port 8001 --reload --no-proxy-headers`);
 });

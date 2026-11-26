@@ -117,6 +117,7 @@ async def test_isolated_cache_preserves_login_rate_limit(client, monkeypatch, re
     first_key, other_key = f"rl:{first_ip}:{path}", f"rl:{other_ip}:{path}"
     start = 1_700_000_000
     now = start
+    monkeypatch.setattr(rate_limit, "_TRUSTED_PROXIES", {"127.0.0.1", "192.0.2.20"})
     monkeypatch.setattr(rate_limit, "time", SimpleNamespace(time=lambda: now))
     if reuse_request_identity:
         monkeypatch.setattr(rate_limit, "id", lambda request: 42, raising=False)
@@ -125,7 +126,7 @@ async def test_isolated_cache_preserves_login_rate_limit(client, monkeypatch, re
     async def login(index, ip=first_ip):
         return await client.post(
             path,
-            headers={"X-Forwarded-For": ip},
+            headers={"X-Forwarded-For": f"192.0.2.99, {ip}, 192.0.2.20"},
             json={"email": f"absent{index}@example.com", "password": "unit-test-invalid-password"},
         )
 
@@ -150,6 +151,80 @@ async def test_isolated_cache_preserves_login_rate_limit(client, monkeypatch, re
     surviving = await cache.zrange(first_key, 0, -1, withscores=True)
     assert [score for _, score in surviving] == [start + 59, start + 60]
     assert await cache.zrange(other_key, 0, -1, withscores=True) == other_records
+
+
+@pytest.mark.asyncio
+async def test_untrusted_login_peer_ignores_forwarded_addresses(client, monkeypatch):
+    from app.core import rate_limit
+
+    bypass = "192.0.2.20"
+    monkeypatch.setattr(rate_limit, "_TRUSTED_PROXIES", {bypass})
+    monkeypatch.setattr(rate_limit, "_BYPASS_IPS", {bypass}, raising=False)
+    path = "/api/v1/auth/login"
+    responses = []
+    for index, claimed_ip in enumerate([bypass, *(f"192.0.2.{n}" for n in range(21, 26))]):
+        responses.append(await client.post(
+            path,
+            headers={"X-Forwarded-For": claimed_ip, "Forwarded": f"for={claimed_ip}"},
+            json={"email": f"absent{index}@example.com", "password": "unit-test-invalid-password"},
+        ))
+
+    assert [response.status_code for response in responses] == [401] * 5 + [429]
+    cache = await rate_limit._get_redis()
+    assert await cache.keys(f"rl:*:{path}") == [f"rl:127.0.0.1:{path}"]
+    assert await cache.zcard(f"rl:127.0.0.1:{path}") == 6
+
+
+@pytest.mark.parametrize(("headers", "expected"), [
+    ([], "192.0.2.20"),
+    ([(b"forwarded", b"for=192.0.2.10")], "192.0.2.20"),
+    ([(b"x-forwarded-for", b"")], "192.0.2.20"),
+    ([(b"x-forwarded-for", b"192.0.2.10, ")], "192.0.2.20"),
+    ([(b"x-forwarded-for", b"invalid, 192.0.2.10")], "192.0.2.20"),
+    ([(b"x-forwarded-for", b"192.0.2.10:123")], "192.0.2.20"),
+    ([(b"x-forwarded-for", b"192.0.2.10"), (b"x-forwarded-for", b"192.0.2.11")], "192.0.2.20"),
+    ([(b"x-forwarded-for", b"192.0.2.21")], "192.0.2.20"),
+    ([(b"x-forwarded-for", b"192.0.2.10")], "192.0.2.10"),
+    ([(b"x-forwarded-for", b"192.0.2.99, ::ffff:192.0.2.10, 192.0.2.21")], "192.0.2.10"),
+])
+def test_trusted_proxy_forwarding_chain(headers, expected, monkeypatch):
+    from starlette.requests import Request
+
+    from app.core import rate_limit
+
+    monkeypatch.setattr(rate_limit, "_TRUSTED_PROXIES", {"192.0.2.20", "192.0.2.21"})
+    request = Request({"type": "http", "client": ("192.0.2.20", 1234), "headers": headers})
+    assert rate_limit._get_client_ip(request) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("peer", "forwarded", "counted_ip"), [
+    ("192.0.2.10", None, None),
+    ("192.0.2.20", None, "192.0.2.20"),
+    ("192.0.2.20", "192.0.2.10", "192.0.2.10"),
+])
+async def test_rate_limit_bypass_requires_an_exempt_direct_client(peer, forwarded, counted_ip, monkeypatch):
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from app.core import rate_limit
+
+    monkeypatch.setattr(rate_limit, "_TRUSTED_PROXIES", {"192.0.2.20"})
+    monkeypatch.setattr(rate_limit, "_BYPASS_IPS", {"192.0.2.10", "192.0.2.20"})
+    path = "/api/v1/auth/login"
+    headers = [(b"x-forwarded-for", forwarded.encode())] if forwarded else []
+    request = Request({
+        "type": "http", "client": (peer, 1234), "path": path, "headers": headers,
+    })
+    response = Response()
+    await rate_limit.RateLimiter("5/minute")(request, response)
+
+    cache = await rate_limit._get_redis()
+    assert await cache.keys(f"rl:*:{path}") == ([f"rl:{counted_ip}:{path}"] if counted_ip else [])
+    if counted_ip:
+        assert response.headers["X-RateLimit-Limit"] == "5"
+        assert response.headers["X-RateLimit-Remaining"] == "4"
+        assert "X-RateLimit-Reset" in response.headers
 
 
 @pytest.mark.asyncio
