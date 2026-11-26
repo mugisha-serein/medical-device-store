@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from sqlalchemy import select, text
+import httpx
+from sqlalchemy import event, select, text
+from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.payments.gateway import PaymentInitiation, MockPaymentGateway
@@ -153,29 +155,149 @@ async def test_malformed_webhook_transaction_id_is_rejected_before_provider_look
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider_failure", ["empty-response", "timeout"])
+@pytest.mark.parametrize("provider_failure", ["timeout", "connection", "unavailable", "exception"])
 async def test_provider_verification_failure_leaves_payment_state_unchanged(
     client, auth_headers, db_session, monkeypatch, provider_failure
 ):
     order, product_id = await create_payment_order(client, auth_headers, db_session)
     before = await payment_state(db_session, order["id"], product_id)
-    gateway = VerifiedWebhookGateway(
-        error=TimeoutError("private provider detail") if provider_failure == "timeout" else None
-    )
+    from app.payments.gateway import FlutterwaveAdapter
+
+    private_detail = "private provider detail"
+    private_key = "fixture-provider-key"
+    requests = []
+    if provider_failure == "exception":
+        gateway = VerifiedWebhookGateway(error=RuntimeError(private_detail))
+    else:
+        gateway = FlutterwaveAdapter()
+        gateway.secret_key = private_key
+
+        async def verify_request(request):
+            requests.append(request)
+            if len(requests) > 1:
+                return httpx.Response(200, json={"status": "success", "data": verified_transaction(order)})
+            if provider_failure == "timeout":
+                raise httpx.ReadTimeout(private_detail, request=request)
+            if provider_failure == "connection":
+                raise httpx.ConnectError(private_detail, request=request)
+            return httpx.Response(503, json={"message": private_detail})
+
+        async def accept_fixture_signature(payload, signature):
+            return signature == "fixture-signature"
+
+        async_client = httpx.AsyncClient
+        monkeypatch.setattr(httpx, "AsyncClient", lambda: async_client(transport=httpx.MockTransport(verify_request)))
+        monkeypatch.setattr(gateway, "verify_webhook", accept_fixture_signature)
     install_verification_gateway(monkeypatch, gateway)
 
     response = await send_payment_webhook(client, order_id=order["id"])
 
-    assert response.status_code == 200
-    assert "private provider detail" not in response.text
+    assert response.status_code == 503
+    assert private_detail not in response.text
+    assert private_key not in response.text
     assert await payment_state(db_session, order["id"], product_id) == before
+
+    if provider_failure == "exception":
+        gateway.error = None
+        gateway.verified = verified_transaction(order)
+    retry = await send_payment_webhook(client, order_id=order["id"])
+    assert retry.status_code == 200
+    assert (await payment_state(db_session, order["id"], product_id))[0] == ("PAID", "12345")
+    if provider_failure == "exception":
+        assert gateway.verified_ids == [12345, 12345]
+    else:
+        assert len(requests) == 2
+        for request in requests:
+            assert request.url.path.endswith("/transactions/12345/verify")
+            assert request.headers["Authorization"] == f"Bearer {private_key}"
+
+
+@pytest.mark.asyncio
+async def test_invalid_webhook_signature_never_reaches_payment_verification(
+    client, auth_headers, db_session, monkeypatch
+):
+    order, product_id = await create_payment_order(client, auth_headers, db_session)
+    before = await payment_state(db_session, order["id"], product_id)
+    gateway = VerifiedWebhookGateway(verified_transaction(order))
+
+    async def reject_signature(payload, signature):
+        return False
+
+    monkeypatch.setattr(gateway, "verify_webhook", reject_signature)
+    install_verification_gateway(monkeypatch, gateway)
+    response = await send_payment_webhook(client, order_id=order["id"])
+
+    assert response.status_code == 401
+    assert gateway.verified_ids == []
+    assert await payment_state(db_session, order["id"], product_id) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["before-mutation", "order-mutation", "stock-hold", "outbox", "commit"])
+async def test_webhook_processing_failure_rolls_back_and_can_be_retried(
+    client, auth_headers, db_session, monkeypatch, failure
+):
+    from app.inventory import service as inventory_service
+    from app.orders.models import Order, OrderStatus, OutboxEvent
+    import app.payments.router as router
+
+    order, product_id = await create_payment_order(client, auth_headers, db_session)
+    order_id = order["id"]
+    before = await payment_state(db_session, order_id, product_id)
+    gateway = VerifiedWebhookGateway(verified_transaction(order))
+    install_verification_gateway(monkeypatch, gateway)
+    private_detail = "private database failure"
+
+    async def fail_confirmation(db, order_id, reference):
+        if failure == "order-mutation":
+            saved_order = await db.get(Order, order_id)
+            saved_order.status = OrderStatus.PAID
+            saved_order.payment_reference = reference
+        raise RuntimeError(private_detail)
+
+    commit_hold = inventory_service.commit_hold
+
+    async def fail_stock_hold(db, order_id):
+        await commit_hold(db, order_id)
+        raise RuntimeError(private_detail)
+
+    def fail_write(*args):
+        raise RuntimeError(private_detail)
+
+    with monkeypatch.context() as faults:
+        if failure in {"before-mutation", "order-mutation"}:
+            faults.setattr(router, "confirm_payment", fail_confirmation)
+        elif failure == "stock-hold":
+            faults.setattr(inventory_service, "commit_hold", fail_stock_hold)
+        else:
+            target, hook = (OutboxEvent, "before_insert") if failure == "outbox" else (Session, "before_commit")
+            event.listen(target, hook, fail_write)
+        try:
+            failed = await send_payment_webhook(client, order_id=order_id)
+        finally:
+            if failure in {"outbox", "commit"}:
+                event.remove(target, hook, fail_write)
+
+    assert failed.status_code == 503
+    assert private_detail not in failed.text
+    assert order_id not in failed.text
+    assert await payment_state(db_session, order_id, product_id) == before
+
+    retry = await send_payment_webhook(client, order_id=order_id)
+    replay = await send_payment_webhook(client, order_id=order_id)
+    assert retry.status_code == replay.status_code == 200
+    assert gateway.verified_ids == [12345, 12345, 12345]
+    saved_order, inventory, holds, outbox = await payment_state(db_session, order_id, product_id)
+    assert saved_order == ("PAID", "12345")
+    assert inventory == (0, 1)
+    assert holds == [(1, "COMMITTED")]
+    assert sum(entry.event_type == "order.paid" for entry in outbox) == 1
 
 
 @pytest.mark.asyncio
 async def test_replayed_and_concurrent_webhooks_commit_stock_and_outbox_once(
     client, auth_headers, monkeypatch, tmp_path
 ):
-    from app.main import app
     from app.core.database import Base, configure_sqlite_engine
     from app.catalog.models import Category, Product
     from app.identity.models import User
@@ -218,16 +340,7 @@ async def test_replayed_and_concurrent_webhooks_commit_stock_and_outbox_once(
 
     Session = async_sessionmaker(test_engine, expire_on_commit=False)
 
-    async def isolated_db():
-        async with Session() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-
-    monkeypatch.setitem(app.dependency_overrides, router.get_db, isolated_db)
+    monkeypatch.setattr(router, "async_session_factory", Session)
     gateway = VerifiedWebhookGateway(verified_transaction(order))
     install_verification_gateway(monkeypatch, gateway)
 

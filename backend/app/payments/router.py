@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import async_session_factory, get_db
 from app.core.security import get_current_user
 from app.identity.models import User
 from app.orders.models import Order, OrderStatus
@@ -88,7 +88,6 @@ async def initiate_payment(
 @router.post("/webhook")
 async def payment_webhook(
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
     """Handle Flutterwave payment webhook. Idempotent — PSPs retry deliveries."""
     body = await request.body()
@@ -135,11 +134,10 @@ async def payment_webhook(
         try:
             verified = await gateway.verify_transaction(transaction_id)
         except Exception:
-            # Preserve the existing webhook acknowledgement behavior without
-            # exposing provider exception text or credentials.
-            return {"status": "ok"}
+            raise HTTPException(status_code=503, detail="Payment verification unavailable.") from None
         if not isinstance(verified, dict):
-            return {"status": "ok"}
+            # The adapter returns None for upstream failures as well as missing verification data.
+            raise HTTPException(status_code=503, detail="Payment verification unavailable.")
 
         # Flutterwave v3's transaction verification response contains id,
         # tx_ref, amount, currency, and status in its `data` object.
@@ -158,39 +156,40 @@ async def payment_webhook(
         ):
             return {"status": "ok"}
 
-        result = await db.execute(select(Order).where(Order.id == order_id))
-        order = result.scalar_one_or_none()
-        if order is None:
-            return {"status": "ok"}
-
         try:
-            provider_amount = Decimal(str(verified_amount))
-            expected_amount = Decimal(str(order.total))
-        except (InvalidOperation, ValueError, TypeError):
-            return {"status": "ok"}
-        if not provider_amount.is_finite() or provider_amount != expected_amount:
-            return {"status": "ok"}
+            # Resolve commit or rollback before acknowledging the delivery.
+            async with async_session_factory.begin() as db:
+                result = await db.execute(select(Order).where(Order.id == order_id))
+                order = result.scalar_one_or_none()
+                if order is None:
+                    return {"status": "ok"}
 
-        payment_reference = str(transaction_id)
-        reused = await db.execute(
-            select(Order.id).where(
-                Order.payment_reference == payment_reference,
-                Order.id != order_id,
-            )
-        )
-        if reused.scalar_one_or_none() is not None:
-            return {"status": "ok"}
+                try:
+                    provider_amount = Decimal(str(verified_amount))
+                    expected_amount = Decimal(str(order.total))
+                except (InvalidOperation, ValueError, TypeError):
+                    return {"status": "ok"}
+                if not provider_amount.is_finite() or provider_amount != expected_amount:
+                    return {"status": "ok"}
 
-        if order.status == OrderStatus.PAID and order.payment_reference == payment_reference:
-            # A verified replay is acknowledged without repeating stock or outbox work.
-            return {"status": "ok"}
-        if order.status != OrderStatus.PENDING_PAYMENT:
-            return {"status": "ok"}
+                payment_reference = str(transaction_id)
+                reused = await db.execute(
+                    select(Order.id).where(
+                        Order.payment_reference == payment_reference,
+                        Order.id != order_id,
+                    )
+                )
+                if reused.scalar_one_or_none() is not None:
+                    return {"status": "ok"}
 
-        try:
-            await confirm_payment(db, order_id, payment_reference)
+                if order.status == OrderStatus.PAID and order.payment_reference == payment_reference:
+                    # A verified replay is acknowledged without repeating stock or outbox work.
+                    return {"status": "ok"}
+                if order.status != OrderStatus.PENDING_PAYMENT:
+                    return {"status": "ok"}
+
+                await confirm_payment(db, order_id, payment_reference)
         except Exception:
-            # Log error but don't fail webhook — PSP will retry
-            pass
+            raise HTTPException(status_code=503, detail="Payment processing unavailable.") from None
 
     return {"status": "ok"}
