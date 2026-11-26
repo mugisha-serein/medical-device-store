@@ -106,12 +106,50 @@ def test_backend_environment_template_is_usable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_isolated_cache_preserves_login_rate_limit(client):
-    for index in range(5):
-        response = await client.post("/api/v1/auth/login", json={"email": f"absent{index}@example.com", "password": "unit-test-invalid-password"})
-        assert response.status_code == 401
-    response = await client.post("/api/v1/auth/login", json={"email": "absent6@example.com", "password": "unit-test-invalid-password"})
-    assert response.status_code == 429
+@pytest.mark.parametrize("reuse_request_identity", [False, True], ids=["rapid", "reused-id"])
+async def test_isolated_cache_preserves_login_rate_limit(client, monkeypatch, reuse_request_identity):
+    from types import SimpleNamespace
+
+    from app.core import rate_limit
+
+    path = "/api/v1/auth/login"
+    first_ip, other_ip = "192.0.2.10", "192.0.2.11"
+    first_key, other_key = f"rl:{first_ip}:{path}", f"rl:{other_ip}:{path}"
+    start = 1_700_000_000
+    now = start
+    monkeypatch.setattr(rate_limit, "time", SimpleNamespace(time=lambda: now))
+    if reuse_request_identity:
+        monkeypatch.setattr(rate_limit, "id", lambda request: 42, raising=False)
+    cache = await rate_limit._get_redis()
+
+    async def login(index, ip=first_ip):
+        return await client.post(
+            path,
+            headers={"X-Forwarded-For": ip},
+            json={"email": f"absent{index}@example.com", "password": "unit-test-invalid-password"},
+        )
+
+    responses = [await login(index) for index in range(6)]
+    assert [response.status_code for response in responses] == [401] * 5 + [429]
+    assert responses[-1].headers["Retry-After"] == "60"
+    records = await cache.zrange(first_key, 0, -1, withscores=True)
+    assert len({member for member, _ in records}) == 6
+    assert {score for _, score in records} == {start}
+
+    assert (await login(6, ip=other_ip)).status_code == 401
+    other_records = await cache.zrange(other_key, 0, -1, withscores=True)
+    assert len(other_records) == 1
+    assert await cache.zrange(first_key, 0, -1, withscores=True) == records
+
+    now = start + 59
+    assert (await login(7)).status_code == 429
+    assert await cache.zcard(first_key) == 7
+
+    now = start + 60
+    assert (await login(8)).status_code == 401
+    surviving = await cache.zrange(first_key, 0, -1, withscores=True)
+    assert [score for _, score in surviving] == [start + 59, start + 60]
+    assert await cache.zrange(other_key, 0, -1, withscores=True) == other_records
 
 
 @pytest.mark.asyncio
