@@ -27,14 +27,14 @@ class VerifiedWebhookGateway(MockPaymentGateway):
         return self.verified
 
 
-async def create_payment_order(client, auth_headers, db_session, product_id=None):
+async def create_payment_order(client, auth_headers, db_session, product_id=None, *, items=None):
     if product_id is None:
         _, product_id = await seed_product(db_session)
     response = await client.post(
         "/api/v1/orders",
         headers=auth_headers,
         json={
-            "items": [{"product_id": product_id, "quantity": 1}],
+            "items": items if items is not None else [{"product_id": product_id, "quantity": 1}],
             "shipping": {"name": "Buyer", "address": "Kigali", "city": "Kigali", "phone": "+250788000000"},
         },
     )
@@ -92,6 +92,144 @@ async def send_payment_webhook(client, transaction_id=12345, *, order_id, **clai
         headers={"verif-hash": "fixture-signature"},
         json={"event": "charge.completed", "data": data},
     )
+
+
+async def complete_stock_snapshot(db):
+    snapshot = {}
+    for table in ("orders", "inventory", "stock_holds", "outbox_events"):
+        snapshot[table] = (await db.execute(text(f"SELECT * FROM {table} ORDER BY id"))).all()
+    await db.rollback()
+    return snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defect", [
+    "missing", "partial", "quantity", "wrong-order", "wrong-product", "elapsed",
+    "released", "committed", "expired", "held-counter", "oversubscribed", "negative-committed",
+])
+async def test_invalid_reservations_block_verified_payment(
+    client, auth_headers, db_session, monkeypatch, defect
+):
+    from app.catalog.models import Product
+    from app.inventory.models import HoldStatus, Inventory, StockHold
+    from sqlalchemy import delete
+
+    category_id, product_id = await seed_product(db_session)
+    other_product = Product(sku="other-payment-item", name="Other item", category_id=category_id, price=50)
+    db_session.add(other_product)
+    await db_session.flush()
+    other_inventory = Inventory(product_id=other_product.id, quantity_total=10)
+    db_session.add(other_inventory)
+    await db_session.commit()
+    order, _ = await create_payment_order(client, auth_headers, db_session, product_id, items=[
+        {"product_id": product_id, "quantity": 1},
+        {"product_id": product_id, "quantity": 2},
+    ])
+    order_id = order["id"]
+    if defect == "missing":
+        await db_session.execute(delete(StockHold).where(StockHold.order_id == order_id))
+    else:
+        hold = (await db_session.execute(
+            select(StockHold).where(StockHold.order_id == order_id, StockHold.quantity == 2)
+        )).scalar_one()
+        inventory = await db_session.get(Inventory, hold.inventory_id)
+        if defect == "partial":
+            await db_session.delete(hold)
+        elif defect == "quantity":
+            hold.quantity = 1
+        elif defect == "wrong-order":
+            hold.order_id = str(uuid4())
+        elif defect == "wrong-product":
+            hold.inventory_id = other_inventory.id
+        elif defect == "elapsed":
+            hold.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        elif defect in {"released", "committed", "expired"}:
+            hold.status = HoldStatus(defect)
+        elif defect == "held-counter":
+            inventory.quantity_held += 1
+        elif defect == "oversubscribed":
+            inventory.quantity_total = 2
+        elif defect == "negative-committed":
+            inventory.quantity_committed = -1
+    await db_session.commit()
+    before = await complete_stock_snapshot(db_session)
+    gateway = VerifiedWebhookGateway(verified_transaction(order))
+    install_verification_gateway(monkeypatch, gateway)
+
+    response = await send_payment_webhook(client, order_id=order_id)
+
+    assert response.status_code == 503
+    assert gateway.verified_ids == [12345]
+    assert await complete_stock_snapshot(db_session) == before
+
+
+@pytest.mark.asyncio
+async def test_multi_item_stock_commit_rolls_back_then_retries_once(
+    client, auth_headers, db_session, monkeypatch
+):
+    from app.catalog.models import Product
+    from app.inventory.models import Inventory
+
+    category_id, first_id = await seed_product(db_session)
+    second = Product(sku="second-payment-item", name="Second item", category_id=category_id, price=50)
+    db_session.add(second)
+    await db_session.flush()
+    second_id = second.id
+    db_session.add(Inventory(product_id=second_id, quantity_total=10))
+    await db_session.commit()
+    order, _ = await create_payment_order(client, auth_headers, db_session, first_id, items=[
+        {"product_id": first_id, "quantity": 1},
+        {"product_id": first_id, "quantity": 2},
+        {"product_id": second_id, "quantity": 1},
+    ])
+    order_id = order["id"]
+    before = await complete_stock_snapshot(db_session)
+    gateway = VerifiedWebhookGateway(verified_transaction(order))
+    install_verification_gateway(monkeypatch, gateway)
+    # Allow the first hold update to reach SQLite before rejecting the next one.
+    await db_session.execute(text("""
+        CREATE TRIGGER fail_second_hold BEFORE UPDATE ON stock_holds
+        WHEN NEW.status = 'COMMITTED' AND EXISTS (
+            SELECT 1 FROM stock_holds WHERE order_id = NEW.order_id AND status = 'COMMITTED'
+        )
+        BEGIN SELECT RAISE(ABORT, 'test failure during stock update'); END
+    """))
+    await db_session.commit()
+    try:
+        failed = await send_payment_webhook(client, order_id=order_id)
+    finally:
+        await db_session.execute(text("DROP TRIGGER fail_second_hold"))
+        await db_session.commit()
+
+    assert failed.status_code == 503
+    assert await complete_stock_snapshot(db_session) == before
+    assert (await send_payment_webhook(client, order_id=order_id)).status_code == 200
+    assert (await send_payment_webhook(client, order_id=order_id)).status_code == 200
+    saved_order, inventory, holds, outbox = await payment_state(db_session, order_id, first_id)
+    assert saved_order == ("PAID", "12345")
+    assert inventory == (0, 3)
+    assert (await payment_state(db_session, order_id, second_id))[1] == (0, 1)
+    assert sorted(holds) == [(1, "COMMITTED"), (1, "COMMITTED"), (2, "COMMITTED")]
+    assert sum(entry.event_type == "order.paid" for entry in outbox) == 1
+    assert gateway.verified_ids == [12345, 12345, 12345]
+
+
+@pytest.mark.asyncio
+async def test_missing_inventory_rejects_confirmation_and_rolls_back(client, auth_headers, db_session):
+    from app.inventory.service import StockReservationError
+    from app.orders.service import confirm_payment
+
+    order, product_id = await create_payment_order(client, auth_headers, db_session)
+    before = await complete_stock_snapshot(db_session)
+    # Simulate a dangling reference only inside a transaction that must roll back.
+    with pytest.raises(StockReservationError):
+        async with db_session.begin():
+            await db_session.execute(text("PRAGMA defer_foreign_keys=ON"))
+            await db_session.execute(
+                text("DELETE FROM inventory WHERE product_id = :id"), {"id": product_id}
+            )
+            await confirm_payment(db_session, order["id"], "12345")
+    assert await complete_stock_snapshot(db_session) == before
 
 
 @pytest.mark.asyncio
@@ -257,8 +395,8 @@ async def test_webhook_processing_failure_rolls_back_and_can_be_retried(
 
     commit_hold = inventory_service.commit_hold
 
-    async def fail_stock_hold(db, order_id):
-        await commit_hold(db, order_id)
+    async def fail_stock_hold(db, order_id, order_items):
+        await commit_hold(db, order_id, order_items)
         raise RuntimeError(private_detail)
 
     def fail_write(*args):
