@@ -51,7 +51,7 @@ python -m scripts.sqlite_database initialize --create
 python -m scripts.seed
 
 # Start the server
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --no-proxy-headers
 ```
 
 ## Project Structure
@@ -367,11 +367,24 @@ See `.env.example` for the full template. Key variables:
 | `EMAIL_FROM` | Sender email address | `noreply@activelife.rw` |
 | `RATE_LIMIT_LOGIN` | Login rate limit | `5/minute` |
 | `RATE_LIMIT_REGISTER` | Register rate limit | `3/minute` |
-| `RATE_LIMIT_BYPASS_IPS` | IPs exempt from rate limiting | `[]` |
+| `RATE_LIMIT_BYPASS_IPS` | Exact direct client IPs exempt from rate limiting | `[]` |
+| `RATE_LIMIT_TRUSTED_PROXY_IPS` | Exact reverse proxy IPs allowed to supply a client address | `[]` |
 | `JWT_ADMIN_BYPASS` | Admin users bypass rate limits | `true` |
 | `BF_MAX_FAILURES` | Failed attempts before lockout | `5` |
 | `BF_LOCKOUT_SECONDS` | Lockout duration (seconds) | `900` (15 min) |
 | `BF_WINDOW_SECONDS` | Sliding window for failure counting | `900` (15 min) |
+
+For a reverse proxy deployment, run Uvicorn with `--no-proxy-headers` so the
+limiter receives the actual socket peer. Set `RATE_LIMIT_TRUSTED_PROXY_IPS` to
+the exact IPs of controlled proxies as a JSON array. The edge proxy must replace
+incoming forwarding metadata with the observed client IP, and subsequent
+trusted proxies must append the address of their immediate peer to a single
+`X-Forwarded-For` header. The limiter walks that chain from right to left and
+uses the first address outside the trusted proxy list. Missing, duplicate,
+invalid, or all-trusted chains use the socket peer's rate limit bucket.
+`RATE_LIMIT_BYPASS_IPS` applies only to direct clients outside the trusted proxy
+list. Deployments that previously used that setting for a reverse proxy should
+move the proxy address to `RATE_LIMIT_TRUSTED_PROXY_IPS`.
 
 ## Testing
 

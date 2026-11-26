@@ -1,12 +1,12 @@
 """
 Redis-backed rate limiter for FastAPI endpoints.
 
-Uses a fixed-window counter per client IP. Returns HTTP 429 with
+Uses a sliding-window counter per client IP. Returns HTTP 429 with
 Retry-After header when the limit is exceeded.
 
 Bypass conditions (checked before hitting Redis):
   - Admin users (is_admin=True via JWT)
-  - Trusted proxy IPs (e.g. internal load balancer)
+  - Explicitly exempted direct client IPs
   - Explicitly exempted paths
 
 Usage:
@@ -17,6 +17,7 @@ Usage:
 """
 
 import time
+from ipaddress import IPv6Address, ip_address
 from typing import Optional
 from uuid import uuid4
 
@@ -36,8 +37,22 @@ _EXEMPT_PATHS: set[str] = {
     "/api/v1/health",
 }
 
-# Trusted proxy IPs that are exempt (e.g. internal LB, monitoring)
-_TRUSTED_PROXIES: set[str] = set(_settings.RATE_LIMIT_BYPASS_IPS)
+
+def _canonical_ip(value: str) -> str | None:
+    value = value.strip()
+    if "%" in value:  # Scoped addresses are ambiguous across interfaces.
+        return None
+    try:
+        address = ip_address(value)
+    except ValueError:
+        return None
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        return str(address.ipv4_mapped)
+    return str(address)
+
+
+_TRUSTED_PROXIES = {ip for value in _settings.RATE_LIMIT_TRUSTED_PROXY_IPS if (ip := _canonical_ip(value))}
+_BYPASS_IPS = {ip for value in _settings.RATE_LIMIT_BYPASS_IPS if (ip := _canonical_ip(value))}
 
 
 async def _get_redis() -> redis.Redis:
@@ -67,11 +82,23 @@ def _parse_rate(rate_str: str) -> tuple[int, int]:
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extract client IP, respecting X-Forwarded-For behind a proxy."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Resolve one X-Forwarded-For chain from an explicitly trusted socket peer."""
+    peer = _canonical_ip(request.client.host) if request.client else None
+    if peer is None or peer not in _TRUSTED_PROXIES:
+        return peer or "unknown"
+
+    forwarded = request.headers.getlist("x-forwarded-for")
+    if len(forwarded) != 1:
+        return peer
+    hops = [_canonical_ip(part) for part in forwarded[0].split(",")]
+    # Trust only the suffix vouched for by known proxies. The first
+    # non-proxy address from the right is the client for rate limiting.
+    if None in hops:
+        return peer
+    for hop in reversed(hops):
+        if hop is not None and hop not in _TRUSTED_PROXIES:
+            return hop
+    return peer
 
 
 def _is_admin_user(request: Request) -> bool:
@@ -131,9 +158,14 @@ class RateLimiter:
         if path in _EXEMPT_PATHS:
             return
 
-        # 2. Trusted proxy IPs
+        # 2. Only an explicitly exempt direct client can bypass by address.
         client_ip = _get_client_ip(request)
-        if client_ip in _TRUSTED_PROXIES:
+        if (
+            client_ip in _BYPASS_IPS
+            and client_ip not in _TRUSTED_PROXIES
+            and request.client
+            and client_ip == _canonical_ip(request.client.host)
+        ):
             return
 
         # 3. Admin user bypass

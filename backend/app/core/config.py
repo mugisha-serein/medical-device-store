@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     # Rate limiting
     RATE_LIMIT_LOGIN: str = "5/minute"
     RATE_LIMIT_REGISTER: str = "3/minute"
-    RATE_LIMIT_BYPASS_IPS: list[str] = []  # Trusted proxy IPs exempt from rate limiting
+    RATE_LIMIT_BYPASS_IPS: list[str] = []  # Direct client IPs exempt from rate limiting
+    RATE_LIMIT_TRUSTED_PROXY_IPS: list[str] = []  # Proxy IPs allowed to forward client addresses
     JWT_ADMIN_BYPASS: bool = True  # Allow admin JWT holders to bypass rate limits
 
     # Brute-force protection
