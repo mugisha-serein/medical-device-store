@@ -137,18 +137,37 @@ def test_startup_and_persistence_across_process_restarts(tmp_path):
     path = tmp_path / "restart.sqlite3"
     initialize_database(sync_url(path), create=True)
     backend = Path(__file__).resolve().parents[1]
-    env = dict(os.environ, DATABASE_URL="sqlite+aiosqlite:///" + path.as_posix(), DATABASE_URL_SYNC=sync_url(path))
+    env = dict(
+        os.environ, DATABASE_URL="sqlite+aiosqlite:///" + path.as_posix(),
+        DATABASE_URL_SYNC=sync_url(path), SERVE_FRONTEND="1",
+    )
     env.pop("TEST_DATABASE_URL", None)
     code = """
 import asyncio, sys
 from sqlalchemy import text
-from app.main import app
+from app.main import app, FRONTEND_DIR
 from app.core.database import engine
 from httpx import AsyncClient, ASGITransport
 async def run():
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-            assert (await client.get('/api/v1/health')).status_code == 200
+            health = await client.get('/api/v1/health')
+            assert health.status_code == 200 and health.json()['status'] == 'healthy'
+            if sys.argv[1] == 'read':
+                expected_css = (FRONTEND_DIR / 'css' / 'style.css').read_bytes()
+                asset = '/css/style.css'
+                full = await client.get(asset)
+                assert full.status_code == 200 and full.content == expected_css
+                assert full.headers['Content-Type'].startswith('text/css')
+                assert (await client.get('/')).status_code == 200
+                valid = await client.get(asset, headers={'Range': 'bytes=0-3'})
+                assert valid.status_code == 206 and valid.content == expected_css[:4]
+                assert valid.headers['Content-Range'] == f'bytes 0-3/{len(expected_css)}'
+                malformed = await client.get(asset, headers={'Range': 'bytes=invalid'})
+                assert malformed.status_code == 400
+                unsatisfiable = await client.get(asset, headers={'Range': f'bytes={len(expected_css)}-'})
+                assert unsatisfiable.status_code == 416
+                assert unsatisfiable.headers['Content-Range'] == f'bytes */{len(expected_css)}'
         async with engine.begin() as conn:
             if sys.argv[1] == 'write':
                 await conn.execute(text("INSERT INTO categories (id, slug, name, created_at) VALUES ('restart', 'restart', 'Restart', CURRENT_TIMESTAMP)"))
@@ -158,7 +177,7 @@ asyncio.run(run())
 """
     for action in ("write", "read"):
         result = subprocess.run([sys.executable, "-c", code, action], cwd=backend, env=env, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 0, "Application lifecycle failed in disposable restart test"
+        assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.asyncio
