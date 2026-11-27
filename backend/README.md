@@ -388,6 +388,21 @@ move the proxy address to `RATE_LIMIT_TRUSTED_PROXY_IPS`.
 
 ## Testing
 
+### FastAPI and Starlette compatibility
+
+FastAPI `0.133.0` and Starlette `1.3.1` are pinned together for the Starlette
+security fixes. Clients sending JSON to routes with a JSON body must supply
+`Content-Type: application/json` or a supported JSON media type. Missing or
+unsupported content types produce HTTP `422`. For a well-formed JSON refresh
+request with an invalid token, the API still returns HTTP `401` with
+`WWW-Authenticate: Bearer`.
+
+Compared with the previous framework versions, OpenAPI's shared
+`ValidationError` adds optional `ctx` and `input` fields. Routes, methods,
+and application schemas match the baseline. Unsatisfiable byte ranges
+return HTTP `416` with `Content-Range: bytes */<size>`. A malformed range
+still returns HTTP `400`.
+
 SQLITE-REF-001 validation (2026-11-23): **88 passed, 0 failed**, with one upstream Argon2 deprecation warning. This includes all 60 previously reported tests and 28 additional cases. The prior ENV-001 baseline was 53 passed and seven order serialization failures; that historical baseline is superseded.
 
 Order creation explicitly refreshes `items` while the async session is open. Retrieval, listing and cancellation explicitly use select-in loading. Nested item schemas accept ORM attributes. Tests verify detached serialization, five-order batch loading (at most two item queries including authentication), ownership checks, cancellation responses, rollback of partially placed orders, and unchanged totals/shipping amounts. The existing OpenAPI schema is unchanged.
